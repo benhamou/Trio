@@ -8,38 +8,37 @@ import Swinject
     static var title: LocalizedStringResource = "Add carbs"
 
     // Description of the action in the Shortcuts app
-    static var description = IntentDescription("Allow to add carbs in Trio.")
-
-    init() {
-        dateAdded = Date()
-    }
+    static var description = IntentDescription(LocalizedStringResource("Allow to add carbs in Trio."))
 
     @Parameter(
         title: "Quantity Carbs",
         description: "Quantity of carbs in g",
         controlStyle: .field,
         inclusiveRange: (lowerBound: 0, upperBound: 200),
-        requestValueDialog: IntentDialog("What is the numeric value of the carb to add")
+        requestValueDialog: IntentDialog(stringLiteral: String(localized: "How many grams of carbs did you eat?"))
     ) var carbQuantity: Double?
 
     @Parameter(
-        title: "Quantity fat",
+        title: "Quantity Fat",
         description: "Quantity of fat in g",
         default: 0.0,
-        inclusiveRange: (0, 200)
+        inclusiveRange: (0, 200),
+        requestValueDialog: IntentDialog(stringLiteral: String(localized: "How many grams of fat did you eat?"))
     ) var fatQuantity: Double
 
     @Parameter(
         title: "Quantity Protein",
         description: "Quantity of Protein in g",
         default: 0.0,
-        inclusiveRange: (0, 200)
+        inclusiveRange: (0, 200),
+        requestValueDialog: IntentDialog(stringLiteral: String(localized: "How many grams of protein did you eat?"))
     ) var proteinQuantity: Double
 
     @Parameter(
         title: "Date",
-        description: "Date of adding"
-    ) var dateAdded: Date
+        description: "Date of adding",
+        requestValueDialog: IntentDialog(stringLiteral: String(localized: "When did you eat ?"))
+    ) var dateAdded: Date?
 
     @Parameter(
         title: "Notes",
@@ -47,21 +46,21 @@ import Swinject
     ) var note: String?
 
     @Parameter(
-        title: "Confirm Before applying",
-        description: "If toggled, you will need to confirm before applying",
+        title: "Confirm Before logging",
+        description: "If toggled, you will need to confirm before logging",
         default: true
     ) var confirmBeforeApplying: Bool
 
     static var parameterSummary: some ParameterSummary {
         When(\.$confirmBeforeApplying, .equalTo, true, {
-            Summary("Applying \(\.$carbQuantity) at \(\.$dateAdded)") {
+            Summary("Log \(\.$carbQuantity) at \(\.$dateAdded)") {
                 \.$fatQuantity
                 \.$proteinQuantity
                 \.$note
                 \.$confirmBeforeApplying
             }
         }, otherwise: {
-            Summary("Immediately applying \(\.$carbQuantity) at \(\.$dateAdded)") {
+            Summary("Immediately Log \(\.$carbQuantity) at \(\.$dateAdded)") {
                 \.$fatQuantity
                 \.$proteinQuantity
                 \.$note
@@ -76,13 +75,25 @@ import Swinject
             if let cq = carbQuantity {
                 quantityCarbs = cq
             } else {
-                quantityCarbs = try await $carbQuantity.requestValue("How many carbs do you want to add?")
+                quantityCarbs = try await $carbQuantity.requestValue("How many grams of carbs?")
+            }
+
+            let dateCarbsAdded: Date
+            let dateDefinedByUser: Bool
+            if let da = dateAdded {
+                dateCarbsAdded = da
+                dateDefinedByUser = true
+            } else {
+                dateCarbsAdded = Date()
+                dateDefinedByUser = false
             }
 
             let quantityCarbsName = quantityCarbs.toString()
             if confirmBeforeApplying {
                 try await requestConfirmation(
-                    result: .result(dialog: "Do you want to add \(quantityCarbsName) grams of carbs?")
+                    result: .result(
+                        dialog: IntentDialog(stringLiteral: String(localized: "Add \(quantityCarbsName) grams of carbs?"))
+                    )
                 )
             }
 
@@ -90,8 +101,9 @@ import Swinject
                 quantityCarbs,
                 fatQuantity,
                 proteinQuantity,
-                dateAdded,
-                note
+                dateCarbsAdded,
+                note,
+                dateDefinedByUser
             )
             return .result(
                 dialog: IntentDialog(stringLiteral: finalQuantityCarbsDisplay)

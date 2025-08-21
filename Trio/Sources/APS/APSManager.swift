@@ -22,7 +22,11 @@ protocol APSManager {
     func enactTempBasal(rate: Double, duration: TimeInterval) async
     func determineBasal() async throws
     func determineBasalSync() async throws
-    func simulateDetermineBasal(simulatedCarbsAmount: Decimal, simulatedBolusAmount: Decimal) async -> Determination?
+    func simulateDetermineBasal(
+        simulatedCarbsAmount: Decimal,
+        simulatedBolusAmount: Decimal,
+        simulatedCarbsDate: Date?
+    ) async -> Determination?
     func roundBolus(amount: Decimal) -> Decimal
     var lastError: CurrentValueSubject<Error?, Never> { get }
     func cancelBolus(_ callback: ((Bool, String) -> Void)?) async
@@ -419,36 +423,30 @@ final class BaseAPSManager: APSManager, Injectable {
         // Fetch glucose asynchronously
         let glucose = try await fetchGlucose(predicate: NSPredicate.predicateForOneHourAgo, fetchLimit: 6)
 
+        var invalidGlucoseError: String?
+
         // Perform the context-related checks and actions
         let isValidGlucoseData = await privateContext.perform { [weak self] in
             guard let self else { return false }
 
             guard glucose.count > 2 else {
                 debug(.apsManager, "Not enough glucose data")
-                self.processError(APSError.glucoseError(message: String(localized: "Not enough glucose data")))
+                invalidGlucoseError =
+                    String(
+                        localized: "Not enough glucose data. You need at least three glucose readings in the last six hours to run the algorithm."
+                    )
                 return false
             }
 
             let dateOfLastGlucose = glucose.first?.date
             guard dateOfLastGlucose ?? Date() >= Date().addingTimeInterval(-12.minutes.timeInterval) else {
                 debug(.apsManager, "Glucose data is stale")
-                self.processError(APSError.glucoseError(message: String(localized: "Glucose data is stale")))
-                return false
-            }
-
-            guard !GlucoseStored.glucoseIsFlat(glucose) else {
-                debug(.apsManager, "Glucose data is too flat")
-                self.processError(APSError.glucoseError(message: String(localized: "Glucose data is too flat")))
+                invalidGlucoseError =
+                    String(localized: "Glucose data is stale. The most recent glucose reading is from more than 12 minutes ago.")
                 return false
             }
 
             return true
-        }
-
-        guard isValidGlucoseData else {
-            debug(.apsManager, "Glucose validation failed")
-            processError(APSError.glucoseError(message: "Glucose validation failed"))
-            return
         }
 
         do {
@@ -462,6 +460,10 @@ final class BaseAPSManager: APSManager, Injectable {
             try await openAPS.createProfiles()
             let determination = try await openAPS.determineBasal(currentTemp: await currentTemp, clock: now)
 
+            guard isValidGlucoseData else {
+                throw APSError.glucoseError(message: "Glucose validation failed")
+            }
+
             if let determination = determination {
                 // Capture weak self in closure
                 await MainActor.run { [weak self] in
@@ -472,7 +474,15 @@ final class BaseAPSManager: APSManager, Injectable {
                 }
             }
         } catch {
-            throw APSError.apsError(message: "Error determining basal: \(error.localizedDescription)")
+            // if we have a glucose validation error we might still run
+            // determineBasal to try to get IoB and CoB updates but we
+            // know that it will fail, so the invalidGlucoseError always
+            // takes priority
+            if let invalidGlucoseError = invalidGlucoseError {
+                throw APSError.apsError(message: invalidGlucoseError)
+            } else {
+                throw APSError.apsError(message: "Error determining basal: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -480,7 +490,11 @@ final class BaseAPSManager: APSManager, Injectable {
         _ = try await determineBasal()
     }
 
-    func simulateDetermineBasal(simulatedCarbsAmount: Decimal, simulatedBolusAmount: Decimal) async -> Determination? {
+    func simulateDetermineBasal(
+        simulatedCarbsAmount: Decimal,
+        simulatedBolusAmount: Decimal,
+        simulatedCarbsDate: Date? = nil
+    ) async -> Determination? {
         do {
             let temp = try await fetchCurrentTempBasal(date: Date.now)
             return try await openAPS.determineBasal(
@@ -488,11 +502,12 @@ final class BaseAPSManager: APSManager, Injectable {
                 clock: Date(),
                 simulatedCarbsAmount: simulatedCarbsAmount,
                 simulatedBolusAmount: simulatedBolusAmount,
+                simulatedCarbsDate: simulatedCarbsDate,
                 simulation: true
             )
         } catch {
             debugPrint(
-                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Error occurred in invokeDummyDetermineBasalSync: \(error)"
+                "\(DebuggingIdentifiers.failed) \(#file) \(#function) Error occurred in simulateDetermineBasal: \(error)"
             )
             return nil
         }
@@ -659,6 +674,12 @@ final class BaseAPSManager: APSManager, Injectable {
 
         guard let pump = pumpManager else {
             throw APSError.apsError(message: "Pump not set")
+        }
+
+        // Check if pump is suspended and abort if it is
+        if pump.status.pumpStatus.suspended {
+            info(.apsManager, "Skipping enactDetermination because pump is suspended")
+            return // return without throwing an error
         }
 
         // Unable to do temp basal during manual temp basal 😁

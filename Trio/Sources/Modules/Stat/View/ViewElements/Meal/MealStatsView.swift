@@ -100,7 +100,10 @@ struct MealStatsView: View {
         }
         .onAppear {
             scrollPosition = StatChartUtils.getInitialScrollPosition(for: selectedInterval)
-            updateAverages()
+            // Delay the initial update to ensure scroll position has been processed
+            DispatchQueue.main.async {
+                updateAverages()
+            }
         }
         .onChange(of: scrollPosition) {
             updateTimer.scheduleUpdate {
@@ -110,7 +113,10 @@ struct MealStatsView: View {
         .onChange(of: selectedInterval) {
             Task {
                 scrollPosition = StatChartUtils.getInitialScrollPosition(for: selectedInterval)
-                updateAverages()
+                // Use async dispatch to ensure scroll position is updated before calculating averages
+                await MainActor.run {
+                    updateAverages()
+                }
             }
         }
     }
@@ -231,7 +237,6 @@ struct MealStatsView: View {
         .chartXAxis {
             AxisMarks(preset: .aligned, values: .stride(by: selectedInterval == .day ? .hour : .day)) { value in
                 if let date = value.as(Date.self) {
-                    let day = Calendar.current.component(.day, from: date)
                     let hour = Calendar.current.component(.hour, from: date)
 
                     switch selectedInterval {
@@ -242,13 +247,15 @@ struct MealStatsView: View {
                             AxisGridLine()
                         }
                     case .month:
-                        if day % 3 == 0 { // Only show every 3rd day
+                        let weekday = calendar.component(.weekday, from: date)
+                        if weekday == calendar.firstWeekday { // Only show the first day of the week
                             AxisValueLabel(format: StatChartUtils.dateFormat(for: selectedInterval), centered: true)
                                 .font(.footnote)
                             AxisGridLine()
                         }
                     case .total:
                         // Only show every other month
+                        let day = Calendar.current.component(.day, from: date)
                         if day == 1 && Calendar.current.component(.month, from: date) % 2 == 1 {
                             AxisValueLabel(format: StatChartUtils.dateFormat(for: selectedInterval), centered: true)
                                 .font(.footnote)

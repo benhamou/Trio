@@ -7,8 +7,9 @@ on:
   #push:
 
   schedule:
-    - cron: "0 8 * * 3" # Checks for updates at 08:00 UTC every Wednesday
-    - cron: "0 6 1 * *" # Builds the app on the 1st of every month at 06:00 UTC
+    # avoid starting an action at xx:00 when GitHub resources are more likely to be impacted
+    - cron: "43 8 * * 3" # Checks for updates at 08:43 UTC every Wednesday
+    - cron: "43 6 1 * *" # Builds the app on the 1st of every month at 06:43 UTC
 
 env:
   UPSTREAM_REPO: nightscout/Trio
@@ -55,29 +56,36 @@ jobs:
 
       - name: Check for alive branches
         if: steps.workflow-permission.outputs.has_permission == 'true'
+        id: check-alive
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          if [[ $(gh api -H "Accept: application/vnd.github+json" /repos/${{ github.repository_owner }}/Trio/branches | jq --raw-output '[.[] | select(.name == "alive-main" or .name == "alive-dev")] | length > 0') == "true" ]]; then
-            echo "Branches 'alive-main' or 'alive-dev' exist."
-            echo "ALIVE_BRANCH_EXISTS=true" >> $GITHUB_ENV
+          branch_list=$(gh api -H "Accept: application/vnd.github+json" /repos/${{ github.repository_owner }}/Trio/branches | jq -r '.[].name')
+      
+          if echo "$branch_list" | grep -q '^alive-main$'; then
+            echo "alive-main exists"
+            echo "ALIVE_MAIN_EXISTS=true" >> $GITHUB_ENV
           else
-            echo "Branches 'alive-main' and 'alive-dev' do not exist."
-            echo "ALIVE_BRANCH_EXISTS=false" >> $GITHUB_ENV
+            echo "alive-main missing"
+            echo "ALIVE_MAIN_EXISTS=false" >> $GITHUB_ENV
+          fi
+      
+          if echo "$branch_list" | grep -q '^alive-dev$'; then
+            echo "alive-dev exists"
+            echo "ALIVE_DEV_EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "alive-dev missing"
+            echo "ALIVE_DEV_EXISTS=false" >> $GITHUB_ENV
           fi
 
-      - name: Create alive branches
-        if: env.ALIVE_BRANCH_EXISTS == 'false'
+      - name: Create alive-main branch if missing
+        if: env.ALIVE_MAIN_EXISTS == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          # Get ref for UPSTREAM_REPO:main
           SHA_MAIN=$(curl -sS -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/git/refs/heads/main | jq -r '.object.sha')
-
-          # Get ref for UPSTREAM_REPO:dev
-          SHA_DEV=$(curl -sS -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/git/refs/heads/dev | jq -r '.object.sha')
-
-          # Create alive-main branch in Trio fork based on UPSTREAM_REPO:main
+      
+          echo "Creating alive-main from upstream main"
           gh api \
             --method POST \
             -H "Authorization: token $GITHUB_TOKEN" \
@@ -86,7 +94,14 @@ jobs:
             -f ref='refs/heads/alive-main' \
             -f sha=$SHA_MAIN
 
-          # Create alive-dev branch in Trio fork based on UPSTREAM_REPO:dev
+      - name: Create alive-dev branch if missing
+        if: env.ALIVE_DEV_EXISTS == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          SHA_DEV=$(curl -sS -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/git/refs/heads/dev | jq -r '.object.sha')
+      
+          echo "Creating alive-dev from upstream dev"
           gh api \
             --method POST \
             -H "Authorization: token $GITHUB_TOKEN" \
@@ -95,6 +110,7 @@ jobs:
             -f ref='refs/heads/alive-dev' \
             -f sha=$SHA_DEV
 
+                  
   # Checks for changes in upstream repository; if changes exist prompts sync for build
   # Performs keepalive to avoid stale fork
   check_latest_from_upstream:
@@ -197,7 +213,7 @@ jobs:
       | # runs if started manually, or if sync schedule is set and enabled and scheduled on the first Saturday each month, or if sync schedule is set and enabled and new commits were found
       github.event_name == 'workflow_dispatch' ||
       (needs.check_alive_and_permissions.outputs.WORKFLOW_PERMISSION == 'true' &&
-        (vars.SCHEDULED_BUILD != 'false' && github.event.schedule == '0 6 1 * *') ||
+        (vars.SCHEDULED_BUILD != 'false' && github.event.schedule == '43 6 1 * *') ||
         (vars.SCHEDULED_SYNC != 'false' && needs.check_latest_from_upstream.outputs.NEW_COMMITS == 'true' )
       )
     steps:

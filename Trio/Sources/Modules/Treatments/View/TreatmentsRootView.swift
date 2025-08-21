@@ -93,10 +93,10 @@ extension Treatments {
                         numberFormatter: mealFormatter,
                         showArrows: true,
                         previousTextField: { focusedField = previousField(from: .protein) },
-                        nextTextField: { focusedField = nextField(from: .protein) }
+                        nextTextField: { focusedField = nextField(from: .protein) },
+                        unitsText: String(localized: "g", comment: "Units for carbs")
                     )
                     .focused($focusedField, equals: .protein)
-                    Text("g").foregroundColor(.secondary)
                 }
 
                 Divider().foregroundStyle(.primary).fontWeight(.bold).frame(width: 10)
@@ -110,10 +110,10 @@ extension Treatments {
                         numberFormatter: mealFormatter,
                         showArrows: true,
                         previousTextField: { focusedField = previousField(from: .fat) },
-                        nextTextField: { focusedField = nextField(from: .fat) }
+                        nextTextField: { focusedField = nextField(from: .fat) },
+                        unitsText: String(localized: "g", comment: "Units for carbs")
                     )
                     .focused($focusedField, equals: .fat)
-                    Text("g").foregroundColor(.secondary)
                 }
             }
         }
@@ -129,13 +129,13 @@ extension Treatments {
                     numberFormatter: mealFormatter,
                     showArrows: true,
                     previousTextField: { focusedField = previousField(from: .carbs) },
-                    nextTextField: { focusedField = nextField(from: .carbs) }
+                    nextTextField: { focusedField = nextField(from: .carbs) },
+                    unitsText: String(localized: "g", comment: "Units for carbs")
                 )
                 .focused($focusedField, equals: .carbs)
                 .onChange(of: state.carbs) {
                     handleDebouncedInput()
                 }
-                Text("g").foregroundColor(.secondary)
             }
         }
 
@@ -224,6 +224,14 @@ extension Treatments {
                                         displayedComponents: [.hourAndMinute]
                                     ).controlSize(.mini)
                                         .labelsHidden()
+                                        .onChange(of: state.date) { _, _ in
+                                            // Trigger simulation when date changes to update forecasts for backdated carbs
+                                            Task {
+                                                // `updateForecasts()` does update the `simulatedDetermination` of type `Determination?` var on the main thread, so I can use this to pass its cob value into the bolus calc manager
+                                                await state.updateForecasts()
+                                                state.insulinCalculated = await state.calculateInsulin()
+                                            }
+                                        }
                                     Button {
                                         state.date = state.date.addingTimeInterval(15.minutes.timeInterval)
                                     }
@@ -247,7 +255,7 @@ extension Treatments {
                                 HStack(spacing: 10) {
                                     if state.fattyMeals {
                                         Toggle(isOn: $state.useFattyMealCorrectionFactor) {
-                                            Text("Fatty Meal")
+                                            Text("Reduced Bolus")
                                         }
                                         .toggleStyle(RadioButtonToggleStyle())
                                         .font(.footnote)
@@ -323,14 +331,14 @@ extension Treatments {
                                     numberFormatter: formatter,
                                     showArrows: true,
                                     previousTextField: { focusedField = previousField(from: .bolus) },
-                                    nextTextField: { focusedField = nextField(from: .bolus) }
+                                    nextTextField: { focusedField = nextField(from: .bolus) },
+                                    unitsText: String(localized: "U", comment: "Units for bolus amount")
                                 ).focused($focusedField, equals: .bolus)
                                     .onChange(of: state.amount) {
                                         Task {
                                             await state.updateForecasts()
                                         }
                                     }
-                                Text(" U").foregroundColor(.secondary)
                             }
 
                             HStack {
